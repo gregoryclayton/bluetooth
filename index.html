@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Bluetooth + Geolocation Logger (Scan All)</title>
+  <title>Bluetooth Scan Plotter</title>
   <style>
     body { font-family: sans-serif; padding: 1rem; }
-    #log { white-space: pre; background: #f5f5f5; padding: 0.5rem; height: 220px; overflow: auto; }
+    #log { white-space: pre; background: #f5f5f5; padding: 0.5rem; height: 200px; overflow: auto; }
     #canvas { border: 1px solid #ccc; background: #fafafa; }
     button { margin: 0.25rem 0; }
   </style>
 </head>
 <body>
-  <h1>Bluetooth + Geolocation Logger</h1>
-  <p><strong>Needs HTTPS/localhost. Scanning all devices requires Chrome with “Experimental Web Platform features” enabled.</strong></p>
+  <h1>Bluetooth Scan Plotter</h1>
+  <p><strong>Requires HTTPS/localhost. For multi-device scanning, enable “Experimental Web Platform features” in Chrome.</strong></p>
   <p>
     <button id="initGeo">Get Initial Location</button>
     <button id="scanBt" disabled>Scan Bluetooth (discover all)</button>
@@ -33,7 +33,7 @@
     const singleSelectBtn = document.getElementById('singleSelect');
 
     let origin = null; // { lat, lon }
-    const sightings = []; // { key, name, lat, lon, dx, dy, timestamp }
+    const sightings = []; // { key, name, dx, dy, lat, lon, timestamp }
     let activeScan = null;
 
     function log(msg) {
@@ -44,10 +44,7 @@
     }
 
     function setOrigin(pos) {
-      origin = {
-        lat: pos.coords.latitude,
-        lon: pos.coords.longitude
-      };
+      origin = { lat: pos.coords.latitude, lon: pos.coords.longitude };
       log(`Origin set at lat=${origin.lat.toFixed(6)}, lon=${origin.lon.toFixed(6)}`);
       scanBtn.disabled = false;
       singleSelectBtn.disabled = false;
@@ -55,7 +52,7 @@
     }
 
     function toMetersOffset(lat1, lon1, lat2, lon2) {
-      const R = 6371000; // meters
+      const R = 6371000;
       const dLat = (lat2 - lat1) * Math.PI / 180;
       const dLon = (lon2 - lon1) * Math.PI / 180;
       const x = dLon * Math.cos((lat1 + lat2) * Math.PI / 360) * R;
@@ -73,14 +70,16 @@
       ctx.lineTo(canvas.width, canvas.height / 2);
       ctx.stroke();
 
+      // origin
       ctx.fillStyle = 'red';
       ctx.beginPath();
       ctx.arc(canvas.width / 2, canvas.height / 2, 5, 0, 2 * Math.PI);
       ctx.fill();
       ctx.fillText('Origin', canvas.width / 2 + 8, canvas.height / 2 - 8);
 
+      // sightings
       ctx.fillStyle = 'blue';
-      const scale = 0.5; // pixels per meter; adjust to taste
+      const scale = 0.5; // px per meter; adjust as needed
       for (const s of sightings) {
         const x = canvas.width / 2 + s.dx * scale;
         const y = canvas.height / 2 - s.dy * scale; // invert y for display
@@ -93,36 +92,26 @@
 
     function recordSighting(name, key) {
       if (!origin) {
-        log('Origin not set; cannot log location.');
+        log('Origin not set; cannot log.');
         return;
       }
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const { latitude, longitude } = pos.coords;
           const { x, y } = toMetersOffset(origin.lat, origin.lon, latitude, longitude);
-          const sighting = {
-            key,
-            name,
-            lat: latitude,
-            lon: longitude,
-            dx: x,
-            dy: y,
-            timestamp: Date.now()
-          };
+          const sighting = { key, name, dx: x, dy: y, lat: latitude, lon: longitude, timestamp: Date.now() };
           sightings.push(sighting);
-          log(`Logged ${name} at dx=${x.toFixed(1)}m, dy=${y.toFixed(1)}m`);
+          log(`Plotted ${name} at dx=${x.toFixed(1)}m, dy=${y.toFixed(1)}m`);
           draw();
         },
-        (err) => log(`Geolocation error on log: ${err.message}`),
+        (err) => log(`Geolocation error: ${err.message}`),
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
 
+    // Set origin
     initGeoBtn.addEventListener('click', () => {
-      if (!('geolocation' in navigator)) {
-        log('Geolocation not supported');
-        return;
-      }
+      if (!navigator.geolocation) return log('Geolocation not supported.');
       navigator.geolocation.getCurrentPosition(
         setOrigin,
         (err) => log(`Geolocation error: ${err.message}`),
@@ -130,32 +119,26 @@
       );
     });
 
-    // Experimental scanning for all advertisements
+    // Experimental scan: plot every device seen
     scanBtn.addEventListener('click', async () => {
-      if (!origin) {
-        log('Set origin first.');
-        return;
-      }
+      if (!origin) return log('Set origin first.');
       if (!navigator.bluetooth || !navigator.bluetooth.requestLEScan) {
-        log('Scanning API not supported; use Single Device fallback.');
+        log('Scanning API not supported; use single-device fallback.');
         return;
       }
       try {
-        // Requires user gesture + experimental flag in Chrome
         activeScan = await navigator.bluetooth.requestLEScan({
-          acceptAllAdvertisements: true, // broad scan
-          keepRepeatedDevices: false    // only first sighting per device
-          // You can add filters like { services: ['battery_service'] } to narrow results
+          acceptAllAdvertisements: true,
+          keepRepeatedDevices: false // first sighting per device
         });
         scanBtn.disabled = true;
         stopBtn.disabled = false;
-        log('Scanning started (experimental API)...');
+        log('Scan started (experimental API)...');
 
         navigator.bluetooth.addEventListener('advertisementreceived', (event) => {
           const name = event.device.name || '(no name)';
-          const key = event.device.id || `${event.device.name}-${event.manufacturerData?.size || 0}`;
-          // avoid duplicate logging if keepRepeatedDevices is true; otherwise, this is first sighting
-          if (sightings.some(s => s.key === key)) return;
+          const key = event.device.id || `${name}-${event.manufacturerData?.size || 0}`;
+          if (sightings.some(s => s.key === key)) return; // already plotted
           recordSighting(name, key);
         });
       } catch (err) {
@@ -164,30 +147,19 @@
     });
 
     stopBtn.addEventListener('click', () => {
-      if (activeScan && activeScan.active) {
-        activeScan.stop();
-        log('Scan stopped.');
-      }
+      if (activeScan && activeScan.active) activeScan.stop();
       activeScan = null;
       scanBtn.disabled = false;
       stopBtn.disabled = true;
+      log('Scan stopped.');
     });
 
-    // Fallback: classic chooser (one device per click)
+    // Fallback: chooser (single device)
     singleSelectBtn.addEventListener('click', async () => {
-      if (!origin) {
-        log('Set origin first.');
-        return;
-      }
-      if (!navigator.bluetooth) {
-        log('Web Bluetooth not supported in this browser.');
-        return;
-      }
+      if (!origin) return log('Set origin first.');
+      if (!navigator.bluetooth) return log('Web Bluetooth not supported.');
       try {
-        const device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: []
-        });
+        const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [] });
         const name = device.name || '(no name)';
         recordSighting(name, device.id);
       } catch (err) {
